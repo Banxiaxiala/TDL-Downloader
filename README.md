@@ -21,6 +21,18 @@
 
 ---
 
+## 界面预览
+
+**下载页** —— 链接自动提取去重，实时显示每个文件的进度、速度、剩余时间与总体进度：
+
+![下载页](docs/screenshot-download.png)
+
+**下载设置页** —— 线程/并发/代理、视频过滤、流量限额：
+
+![下载设置页](docs/screenshot-settings.png)
+
+---
+
 ## 环境要求
 
 | 项目 | 要求 |
@@ -177,6 +189,7 @@ pythonw tdl_gui.pyw
 TDL-Downloader/
 ├── tdl_gui.pyw            # 主程序（GUI 全部逻辑）
 ├── 启动TDL下载器.bat       # 启动脚本（自动查找 pythonw.exe）
+├── docs/                  # README 截图
 ├── .gitignore             # 排除二进制、运行时数据、下载内容
 ├── README.md              # 本文档
 └── LICENSE                # AGPL-3.0（继承自 iyear/tdl）

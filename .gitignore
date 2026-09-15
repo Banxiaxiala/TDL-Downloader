@@ -34,5 +34,6 @@ venv/
 .vscode/
 .idea/
 .trae/
+cof/
 Thumbs.db
 desktop.ini
