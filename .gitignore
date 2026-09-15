@@ -1,0 +1,38 @@
+# ===== 二进制依赖（自行下载放置，见 README）=====
+tdl.exe
+aria2/
+*.exe
+
+# ===== 运行时数据（含个人配置/隐私，勿提交）=====
+config.json
+links.txt
+链接整理输入.txt
+链接2
+L链接.TXT
+L链接_去重.TXT
+history.json
+history_files.json
+traffic_quota.json
+file_meta_cache.json
+debug.log
+
+# ===== 下载内容与日志 =====
+DOW/
+logs/
+*.part
+*.aria2
+*.aria2__temp
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+.trae/
+Thumbs.db
+desktop.ini
