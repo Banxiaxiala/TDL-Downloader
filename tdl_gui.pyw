@@ -9,6 +9,7 @@ TDL 视频下载器 GUI
 import os
 import re
 import sys
+import glob
 import json
 import socket
 import time
@@ -2000,6 +2001,10 @@ class TDLApp:
         判断「下完」不能只看 .aria2 控制文件：aria2c 被强杀时会先删掉
         自己的控制文件再退出，只下了一半的 .part 也会变成「无 .aria2」，
         从而被误判成下完。所以这里以 HEAD 拿到的总大小为准做校验。
+
+        注意：expect_size 来自下载前 HEAD 的 Content-Length。Telegram 的
+        分片/多版本文件实际落盘大小可能与它不符，所以大小对不上只当作
+        「没下完」处理，不能据此判断改名失败。
         """
         out_dir = self.dir_var.get().strip()
         if not out_dir:
@@ -2007,8 +2012,12 @@ class TDLApp:
         tmp = os.path.join(out_dir, final + ".part")
         target = os.path.join(out_dir, final)
         if not os.path.isfile(tmp):
-            # 没有 .part：要么已转正，要么本次根本没这个任务
-            return True, os.path.isfile(target)
+            # 没有 .part：要么已转正，要么本次根本没这个任务。
+            # 这里必须用 _exists_final 做宽松匹配：finals 里可能是未展开的
+            # 分片模板名（如 xxx%01d1.mp4），而落盘的是展开后的真实文件名，
+            # 直接用 os.path.isfile(target) 会匹配不上，把「已改名成功」误判成
+            # 「改名失败」，进而报出「文件仍被占用」的假错误。
+            return True, self._exists_final(out_dir, final)
         if os.path.isfile(tmp + ".aria2"):
             return False, False                  # 明确还在下，保留 .part
         if expect_size > 0:
@@ -2023,42 +2032,62 @@ class TDLApp:
             self._log("下载完成: %s" % final, "ok")
             return True, True
         except Exception as e:
-            # 文件仍被占用（残留进程句柄未释放）是最常见的失败原因，交给上层重试
+            # 到这里才是真的被占用（残留进程句柄未释放），交给上层重试
             self._log("重命名失败 %s: %s" % (final, e), "warn")
             return True, False
+
+    @staticmethod
+    def _exists_final(out_dir, final):
+        """判断某个任务名对应的正式文件是否已存在
+
+        优先精确匹配；匹配不到再用通配兜底，处理 finals 里带 printf 占位符
+        （%d / %01d / %s）而落盘名字已展开的情况。通配只在名字含 % 时启用，
+        避免每次都做一次目录扫描。
+        """
+        if os.path.isfile(os.path.join(out_dir, final)):
+            return True
+        if "%" not in final:
+            return False
+        try:
+            stem = os.path.basename(final).replace("%01d", "*").replace("%d", "*") \
+                .replace("%s", "*")
+            return bool(glob.glob(os.path.join(out_dir, stem)))
+        except Exception:
+            return False
 
     def _rename_completed(self, out_dir, finals, sizes=None):
         """收尾：把所有已下完的 .part 改回正式文件名（兜底，正常已在完成时改过）
 
-        改名可能因文件仍被占用（残留的 tdl/aria2c 进程句柄未释放）而失败，
-        所以这里重试几轮；仍失败就明确报出来，不再静默跳过。
-        未下完的文件直接跳过，不报错。
+        只有 os.replace 真的抛异常（文件被占用）才重试并报错；
+        未下完的文件直接跳过，不报错——它们保留 .part 是预期行为，下次续传。
+
+        返回值 (改名成功数, 仍未完成数, 真失败列表)，供上层汇总说明。
         """
         sizes = sizes or {}
         prev = self.dir_var.get()
         try:
             self.dir_var.set(out_dir)
-            pending = list(finals)
+            done = 0
+            unfinished = 0
             failed = []
             for attempt in range(5):
-                still = []
                 failed = []
-                for final in pending:
+                for final in finals:
                     finished, ok = self._try_finalize(final, sizes.get(final, 0))
-                    if not finished:
-                        continue                 # 没下完，不参与改名
-                    if not ok:
+                    if finished and ok:
+                        done += 1
+                    elif finished and not ok:
+                        # 只有「已结束但改名没成」才值得重试
                         failed.append(final)
+                    else:
+                        unfinished += 1
                 if not failed:
-                    if not still:
-                        return
-                    pending = still
-                    continue
-                pending = failed + still
+                    return done, unfinished, []
                 # 句柄释放需要一点时间，等一下再试
                 time.sleep(0.5 * (attempt + 1))
             for final in failed:
-                self._log("改名未成功，文件仍被占用，请手动把 .part 去掉: %s.part" % final, "err")
+                self._log("改名失败（文件被占用），请手动把 .part 去掉: %s.part" % final, "err")
+            return done, unfinished, failed
         finally:
             self.dir_var.set(prev)
 
@@ -2081,7 +2110,13 @@ class TDLApp:
         if left:
             self._log("收尾：清理残留进程 %s" % ", ".join(left), "warn")
             self._wait_no_leftover()
-        self._rename_completed(out_dir, finals, sizes)
+        done, unfinished, failed = self._rename_completed(out_dir, finals, sizes)
+        if done:
+            self._log("收尾：%d 个文件已转正名" % done, "ok")
+        if unfinished:
+            # 没下完保留 .part 是预期行为（serve 断连/手动停止/流量超限），
+            # 不是错误，重跑即可续传，所以这里只提示不报错
+            self._log("收尾：%d 个文件未下完，保留 .part，重跑可续传" % unfinished, "info")
         self._sweep_orphan_parts(out_dir, finals)
 
     @staticmethod
