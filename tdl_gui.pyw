@@ -1551,13 +1551,27 @@ class TDLApp:
         self._dl_clear()
 
         skipped_set = set(skipped)
-        name_of = {gid: gid_names[gid] for gid in self._prog_gids}
-        # 按链接原顺序排列；没有顺序信息时（如 RPC 未取到任务列表）退回 aria2 顺序
-        ordered = [n for n in getattr(self, "_ordered_names", []) if n in set(name_of.values())]
-        extra = [name_of[g] for g in self._prog_gids if name_of[g] not in set(ordered)]
-        for name in ordered + extra:
+        # 用链接原顺序作为行的排列依据：_ordered_names 含本次全部文件（待下载 + 已跳过）。
+        # gid_names 已由 _start_progress 按同一顺序排好，这里做一次合并，
+        # 落在 _ordered_names 之外的名字（理论上没有）追加在末尾。
+        gid_of_name = {}
+        for gid in self._prog_gids:
+            gid_of_name.setdefault(gid_names[gid], gid)
+        seq = []
+        seen = set()
+        for name in getattr(self, "_ordered_names", []):
+            if name in gid_of_name or name in skipped_set:
+                seq.append(name)
+                seen.add(name)
+        for name in list(gid_of_name.keys()) + list(skipped):
+            if name not in seen:
+                seq.append(name)
+                seen.add(name)
+
+        for name in seq:
             total = int(sizes.get(name, 0) or 0)
-            if name in skipped_set:
+            gid = gid_of_name.get(name)
+            if gid is None:
                 # 已存在、本次不重新下载：就地标为已完成，不挪到底部
                 size_txt = "-" if total <= 0 else "%s / %s" % (fmt_size(total), fmt_size(total))
                 iid = self.dl_tree.insert("", "end", text=name,
@@ -1566,26 +1580,13 @@ class TDLApp:
                 self._dl_iids[name] = iid
                 self._dl_meta[name] = {"total": total or 1, "done": total or 1, "status": "已完成"}
                 continue
-            gid = next((g for g in self._prog_gids if name_of[g] == name), None)
             size_txt = "-" if total <= 0 else "%s / %s" % (fmt_size(0), fmt_size(total))
             iid = self.dl_tree.insert("", "end", text=name,
                                       values=("", "0.0%", size_txt, "-", "-", "等待中"),
                                       tags=("wait",))
             self._dl_iids[name] = iid
             self._dl_meta[name] = {"total": total, "done": 0, "status": "等待中"}
-            if gid is not None:
-                self._prog_marks[gid] = "等待中"
-        # 兜底：跳过列表里可能出现原顺序中没有的名字（理论上不会）
-        for name in skipped:
-            if name in self._dl_meta:
-                continue
-            total = int(sizes.get(name, 0) or 0)
-            size_txt = "-" if total <= 0 else "%s / %s" % (fmt_size(total), fmt_size(total))
-            iid = self.dl_tree.insert("", "end", text=name,
-                                      values=(make_bar(100.0), "100.0%", size_txt, "-", "-", "已完成"),
-                                      tags=("done",))
-            self._dl_iids[name] = iid
-            self._dl_meta[name] = {"total": total or 1, "done": total or 1, "status": "已完成"}
+            self._prog_marks[gid] = "等待中"
         total_files = len(gid_names) + len(skipped)
         known = sum(1 for m in self._dl_meta.values() if m["total"] > 0)
         if known:
@@ -1737,6 +1738,14 @@ class TDLApp:
             else:
                 self._log("未能从 aria2 获取任务列表，进度条不可用（下载不受影响）", "warn")
             return
+        # 按 finals（即链接原顺序）重排 gid。aria2 返回的顺序是
+        # tellActive（下载中）+ tellWaiting（排队），同一时刻的下载中任务
+        # 会整体排在排队任务前面，导致列表看着忽上忽下、和链接顺序无关。
+        # 这里以 finals 的顺序为准重建 gid_names。
+        rank = {f: i for i, f in enumerate(finals)}
+        ordered_gids = sorted(gid_names.keys(),
+                              key=lambda g: (rank.get(gid_names[g], len(rank)), gid_names[g]))
+        gid_names = {g: gid_names[g] for g in ordered_gids}
         self._log("开始实时进度显示（%d 个任务）" % len(gid_names), "info")
         self.out_q.put((None, ("prog", "__init__", (gid_names, sizes, self._skipped_existing))))
         self._rpc_stop = False
