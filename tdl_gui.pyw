@@ -20,7 +20,19 @@ import urllib.request
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def _app_dir():
+    """程序所在目录（数据文件都放这里）
+
+    打包成 exe 后 __file__ 指向 PyInstaller 的临时解压目录，
+    用它当基目录会导致找不到 tdl.exe，且配置/日志/下载目录
+    每次运行都变、重启即丢。所以冻结时以 exe 所在目录为准。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = _app_dir()
 TDL_EXE = os.path.join(BASE_DIR, "tdl.exe")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
